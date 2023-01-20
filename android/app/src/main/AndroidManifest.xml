@@ -80,11 +80,14 @@
                 android:autoVerify="true"
                 tools:ignore="UnusedAttribute">
                 <action android:name="android.nfc.action.NDEF_DISCOVERED" />
+                <action android:name="android.intent.action.VIEW" />
+
                 <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+
                 <data
                     android:host="my.yubico.com"
                     android:scheme="https" />
-
             </intent-filter>
 
         </activity>
