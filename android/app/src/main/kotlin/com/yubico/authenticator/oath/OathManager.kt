@@ -272,7 +272,11 @@ class OathManager(
 
                     if (oath.version.isLessThan(4, 0, 0) && connection.transport == Transport.NFC) {
                         // NEO over NFC, select OTP applet before reading info
-                        SmartCardProtocol(connection).select(OTP_AID)
+                        try {
+                            SmartCardProtocol(connection).select(OTP_AID)
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Failed to select OTP - is this a YubiKey NEO?")
+                        }
                     }
 
                     // Update deviceInfo since the deviceId has changed
