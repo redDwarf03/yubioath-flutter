@@ -51,16 +51,25 @@ import 'state.dart';
 final _log = Logger('desktop.init');
 const String _keyWidth = 'DESKTOP_WINDOW_WIDTH';
 const String _keyHeight = 'DESKTOP_WINDOW_HEIGHT';
+const String _keyPosX = 'DESKTOP_WINDOW_POS_X';
+const String _keyPosY = 'DESKTOP_WINDOW_POS_Y';
 
-class _WindowResizeListener extends WindowListener {
+class _WindowManagerListener extends WindowListener {
   final SharedPreferences _prefs;
-  _WindowResizeListener(this._prefs);
+  _WindowManagerListener(this._prefs);
 
   @override
   void onWindowResize() async {
     final size = await windowManager.getSize();
     await _prefs.setDouble(_keyWidth, size.width);
     await _prefs.setDouble(_keyHeight, size.height);
+  }
+
+  @override
+  void onWindowMoved() async {
+    final offset = await windowManager.getPosition();
+    await _prefs.setDouble(_keyPosX, offset.dx);
+    await _prefs.setDouble(_keyPosY, offset.dy);
   }
 }
 
@@ -72,11 +81,18 @@ Future<Widget> initialize(List<String> argv) async {
 
   unawaited(windowManager.waitUntilReadyToShow().then((_) async {
     await windowManager.setMinimumSize(const Size(270, 0));
+
     final width = prefs.getDouble(_keyWidth) ?? 400;
     final height = prefs.getDouble(_keyHeight) ?? 720;
-    await windowManager.setSize(Size(width, height));
+    final posX = prefs.getDouble(_keyPosX);
+    final posY = prefs.getDouble(_keyPosY);
+
+    await windowManager.setBounds(null,
+        size: Size(width, height),
+        position: (posX != null && posY != null) ? Offset(posX, posY) : null);
+
     await windowManager.show();
-    windowManager.addListener(_WindowResizeListener(prefs));
+    windowManager.addListener(_WindowManagerListener(prefs));
   }));
 
   // Either use the _HELPER_PATH environment variable, or look relative to executable.
