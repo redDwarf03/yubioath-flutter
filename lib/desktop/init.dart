@@ -26,6 +26,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:logging/logging.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:window_manager/window_manager.dart';
+import 'package:platform_util/platform_util.dart';
 
 import '../app/app.dart';
 import '../app/logging.dart';
@@ -84,12 +85,18 @@ Future<Widget> initialize(List<String> argv) async {
 
     final width = prefs.getDouble(_keyWidth) ?? 400;
     final height = prefs.getDouble(_keyHeight) ?? 720;
-    final posX = prefs.getDouble(_keyPosX);
-    final posY = prefs.getDouble(_keyPosY);
+    final posX = prefs.getDouble(_keyPosX) ?? 0;
+    final posY = prefs.getDouble(_keyPosY) ?? 0;
 
-    await windowManager.setBounds(null,
-        size: Size(width, height),
-        position: (posX != null && posY != null) ? Offset(posX, posY) : null);
+    if (await platformUtil.canPlaceWindowTo(posX, posY, width, height) ??
+        false) {
+      _log.info('Placing window to expected location [${posX.toInt()},${posY.toInt()}:${width.toInt()}x${height.toInt()}]');
+
+      await windowManager.setBounds(null,
+          size: Size(width, height), position: Offset(posX, posY));
+    } else {
+      _log.info('Could not place window to expected location [${posX.toInt()},${posY.toInt()}:${width.toInt()}x${height.toInt()}], using default');
+    }
 
     await windowManager.show();
     windowManager.addListener(_WindowManagerListener(prefs));
