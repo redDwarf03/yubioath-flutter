@@ -26,7 +26,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:logging/logging.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:window_manager/window_manager.dart';
-import 'package:platform_util/platform_util.dart';
+import 'package:screen_retriever/screen_retriever.dart';
 
 import '../app/app.dart';
 import '../app/logging.dart';
@@ -52,6 +52,7 @@ import 'state.dart';
 final _log = Logger('desktop.init');
 const String _keyWidth = 'DESKTOP_WINDOW_WIDTH';
 const String _keyHeight = 'DESKTOP_WINDOW_HEIGHT';
+const String _keyPosDisplay = 'DESKTOP_WINDOW_POS_DISPLAY';
 const String _keyPosX = 'DESKTOP_WINDOW_POS_X';
 const String _keyPosY = 'DESKTOP_WINDOW_POS_Y';
 
@@ -61,16 +62,43 @@ class _WindowManagerListener extends WindowListener {
 
   @override
   void onWindowResize() async {
-    final size = await windowManager.getSize();
-    await _prefs.setDouble(_keyWidth, size.width);
-    await _prefs.setDouble(_keyHeight, size.height);
+    windowMovedOrResized();
   }
 
   @override
   void onWindowMoved() async {
+    windowMovedOrResized();
+  }
+
+  void windowMovedOrResized() async {
+    final size = await windowManager.getSize();
     final offset = await windowManager.getPosition();
-    await _prefs.setDouble(_keyPosX, offset.dx);
-    await _prefs.setDouble(_keyPosY, offset.dy);
+    final displays = await screenRetriever.getAllDisplays();
+
+    for (var d in displays) {
+      if (d.visiblePosition != null &&
+          d.visibleSize != null &&
+          d.name != null) {
+        final windowCenter =
+            Offset(offset.dx + size.width / 2.0, offset.dy + size.height / 2.0);
+        if ((windowCenter.dx >= d.visiblePosition!.dx) &&
+            (windowCenter.dx <
+                (d.visiblePosition!.dx + d.visibleSize!.width)) &&
+            (windowCenter.dy >= d.visiblePosition!.dy) &&
+            (windowCenter.dy <
+                (d.visiblePosition!.dy + d.visibleSize!.height))) {
+          final localOffset = Offset(offset.dx - d.visiblePosition!.dx,
+              offset.dy - d.visiblePosition!.dy);
+          _log.debug(
+              'Window moved to ${d.name}: global offset = $offset / local offset = $localOffset');
+          await _prefs.setString(_keyPosDisplay, d.name!);
+          await _prefs.setDouble(_keyPosX, localOffset.dx);
+          await _prefs.setDouble(_keyPosY, localOffset.dy);
+          await _prefs.setDouble(_keyWidth, size.width);
+          await _prefs.setDouble(_keyHeight, size.height);
+        }
+      }
+    }
   }
 }
 
@@ -85,17 +113,39 @@ Future<Widget> initialize(List<String> argv) async {
 
     final width = prefs.getDouble(_keyWidth) ?? 400;
     final height = prefs.getDouble(_keyHeight) ?? 720;
-    final posX = prefs.getDouble(_keyPosX) ?? 0;
-    final posY = prefs.getDouble(_keyPosY) ?? 0;
 
-    if (await platformUtil.canPlaceWindowTo(posX, posY, width, height) ??
-        false) {
-      _log.info('Placing window to expected location [${posX.toInt()},${posY.toInt()}:${width.toInt()}x${height.toInt()}]');
+    final posDisplay = prefs.getString(_keyPosDisplay);
+    final posX = prefs.getDouble(_keyPosX);
+    final posY = prefs.getDouble(_keyPosY);
 
-      await windowManager.setBounds(null,
-          size: Size(width, height), position: Offset(posX, posY));
-    } else {
-      _log.info('Could not place window to expected location [${posX.toInt()},${posY.toInt()}:${width.toInt()}x${height.toInt()}], using default');
+    _log.info(
+        'Target display: $posDisplay');
+
+    if (posDisplay != null && posX != null && posY != null) {
+      final displays = await screenRetriever.getAllDisplays();
+      for (var d in displays) {
+        if (d.name == posDisplay) {
+          _log.info(
+              'Target display properties: ${d.id} ${d.name} ${d.visiblePosition} ${d.visibleSize} ${d
+                  .scaleFactor} ${d.size}');
+
+          var globalPos = Offset(10 + d.visiblePosition!.dx, 10 + d.visiblePosition!.dy);
+          if ((posX >= 0) &&
+              (posX < d.visibleSize!.width) &&
+              (posY >= 0) &&
+              (posY < d.visibleSize!.height)) {
+            // if the local position exists on the display, use it
+            globalPos = Offset(
+                posX + d.visiblePosition!.dx, posY + d.visiblePosition!.dy);
+          }
+
+          _log.info(
+              'Setting window to ${d.name} on local pos $posX, $posY, global: $globalPos');
+          await windowManager.setBounds(null,
+              size: Size(width, height),
+              position: Offset(globalPos.dx, globalPos.dy));
+        }
+      }
     }
 
     await windowManager.show();
