@@ -19,6 +19,7 @@ from helper import run_rpc_pipes, run_rpc_socket
 import socket
 import sys
 
+# test for codeql trigger inside helper folder
 
 if __name__ == "__main__":
     if "--tcp" in sys.argv:
