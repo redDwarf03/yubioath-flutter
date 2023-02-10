@@ -12,7 +12,7 @@ class PlatformUtilPlugin : public flutter::Plugin {
  public:
   static void RegisterWithRegistrar(flutter::PluginRegistrarWindows *registrar);
 
-  PlatformUtilPlugin();
+  explicit PlatformUtilPlugin(flutter::PluginRegistrarWindows* registrar);
 
   virtual ~PlatformUtilPlugin();
 
@@ -25,6 +25,8 @@ class PlatformUtilPlugin : public flutter::Plugin {
   void HandleMethodCall(
       const flutter::MethodCall<flutter::EncodableValue> &method_call,
       std::unique_ptr<flutter::MethodResult<flutter::EncodableValue>> result);
+  flutter::PluginRegistrarWindows* registrar;
+  HWND native_window;
 };
 
 }  // namespace platform_util

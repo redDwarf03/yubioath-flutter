@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2022 Yubico.
+ * Copyright (C) 2022-2023 Yubico.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,6 +17,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:ui';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -24,6 +25,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_gen/gen_l10n/app_localizations.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:logging/logging.dart';
+import 'package:platform_util/platform_util.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:window_manager/window_manager.dart';
 import 'package:screen_retriever/screen_retriever.dart';
@@ -55,9 +57,11 @@ const String _keyHeight = 'DESKTOP_WINDOW_HEIGHT';
 const String _keyPosDisplay = 'DESKTOP_WINDOW_POS_DISPLAY';
 const String _keyPosX = 'DESKTOP_WINDOW_POS_X';
 const String _keyPosY = 'DESKTOP_WINDOW_POS_Y';
+const String _keyPrimaryScaleFactor = 'DESKTOP_PRIMARY_SCALE_FACTOR';
 
 class _WindowManagerListener extends WindowListener {
   final SharedPreferences _prefs;
+
   _WindowManagerListener(this._prefs);
 
   @override
@@ -70,7 +74,35 @@ class _WindowManagerListener extends WindowListener {
     windowMovedOrResized();
   }
 
+  void windowsOnWindowMovedOrResized() async {
+    final windowRect = await platformUtil.getWindowRect();
+    final primaryDisplay = await screenRetriever.getPrimaryDisplay();
+
+    final dpi = window.devicePixelRatio * 96.0;
+
+    final double pdFactor = primaryDisplay.scaleFactor?.toDouble() ?? 1.0;
+    final double pWidth = windowRect.width * pdFactor / window.devicePixelRatio;
+    final double pHeight =
+        windowRect.height * pdFactor / window.devicePixelRatio;
+
+    _log.debug(
+        'Persisting window bounds [${windowRect.left.toInt()},${windowRect.top.toInt()};${pWidth.toInt()}x${pHeight.toInt()}] windowDpi=$dpi windowScaleFactor=${window.devicePixelRatio}');
+    await _prefs.setDouble(_keyPosX, windowRect.left);
+    await _prefs.setDouble(_keyPosY, windowRect.top);
+    await _prefs.setDouble(_keyWidth, pWidth);
+    await _prefs.setDouble(_keyHeight, pHeight);
+    await _prefs.setDouble(_keyPrimaryScaleFactor, pdFactor);
+  }
+
   void windowMovedOrResized() async {
+    if (Platform.isWindows) {
+      windowsOnWindowMovedOrResized();
+    } else {
+      macOsOnWindowMovedOrResized();
+    }
+  }
+
+  void macOsOnWindowMovedOrResized() async {
     final size = await windowManager.getSize();
     final offset = await windowManager.getPosition();
     final displays = await screenRetriever.getAllDisplays();
@@ -102,6 +134,74 @@ class _WindowManagerListener extends WindowListener {
   }
 }
 
+void windowsInitialize(SharedPreferences prefs) async {
+  await platformUtil.init();
+  await windowManager.setMinimumSize(const Size(270, 0));
+  final primaryDisplay = await screenRetriever.getPrimaryDisplay();
+  final double primaryScaleFactor =
+      primaryDisplay.scaleFactor?.toDouble() ?? 1.0;
+
+  final width = prefs.getDouble(_keyWidth) ?? 400;
+  final height = prefs.getDouble(_keyHeight) ?? 720;
+  final posX = prefs.getDouble(_keyPosX) ?? 0.0;
+  final posY = prefs.getDouble(_keyPosY) ?? 0.0;
+  final savedPrimaryScaleFactor =
+      prefs.getDouble(_keyPrimaryScaleFactor) ?? 1.0;
+
+  _log.debug(
+      'Initializing window from persisted data at [${posX.toInt()},${posY.toInt()}:${width.toInt()}x${height.toInt()}]');
+  final windowRect = Rect.fromLTWH(
+    posX,
+    posY,
+    width / savedPrimaryScaleFactor * primaryScaleFactor,
+    height / savedPrimaryScaleFactor * primaryScaleFactor,
+  );
+  await platformUtil.setWindowRect(windowRect);
+  await windowManager.show();
+}
+
+void macOsInitialize(SharedPreferences prefs) async {
+  await windowManager.setMinimumSize(const Size(270, 0));
+
+  final width = prefs.getDouble(_keyWidth) ?? 400;
+  final height = prefs.getDouble(_keyHeight) ?? 720;
+
+  final posDisplay = prefs.getString(_keyPosDisplay);
+  final posX = prefs.getDouble(_keyPosX);
+  final posY = prefs.getDouble(_keyPosY);
+
+  _log.debug('Target display: $posDisplay');
+
+  if (posDisplay != null && posX != null && posY != null) {
+    final displays = await screenRetriever.getAllDisplays();
+    for (var d in displays) {
+      if (d.name == posDisplay) {
+        _log.debug(
+            'Target display properties: ${d.id} ${d.name} ${d.visiblePosition} ${d.visibleSize} ${d.scaleFactor} ${d.size}');
+
+        var globalPos =
+            Offset(10 + d.visiblePosition!.dx, 10 + d.visiblePosition!.dy);
+        if ((posX >= 0) &&
+            (posX < d.visibleSize!.width) &&
+            (posY >= 0) &&
+            (posY < d.visibleSize!.height)) {
+          // if the local position exists on the display, use it
+          globalPos = Offset(
+              posX + d.visiblePosition!.dx, posY + d.visiblePosition!.dy);
+        }
+
+        _log.debug(
+            'Setting window to ${d.name} on local pos $posX, $posY, global: $globalPos');
+        await windowManager.setBounds(null,
+            size: Size(width, height),
+            position: Offset(globalPos.dx, globalPos.dy));
+      }
+    }
+  }
+
+  await windowManager.show();
+}
+
 Future<Widget> initialize(List<String> argv) async {
   _initLogging(argv);
 
@@ -109,46 +209,11 @@ Future<Widget> initialize(List<String> argv) async {
   final prefs = await SharedPreferences.getInstance();
 
   unawaited(windowManager.waitUntilReadyToShow().then((_) async {
-    await windowManager.setMinimumSize(const Size(270, 0));
-
-    final width = prefs.getDouble(_keyWidth) ?? 400;
-    final height = prefs.getDouble(_keyHeight) ?? 720;
-
-    final posDisplay = prefs.getString(_keyPosDisplay);
-    final posX = prefs.getDouble(_keyPosX);
-    final posY = prefs.getDouble(_keyPosY);
-
-    _log.info(
-        'Target display: $posDisplay');
-
-    if (posDisplay != null && posX != null && posY != null) {
-      final displays = await screenRetriever.getAllDisplays();
-      for (var d in displays) {
-        if (d.name == posDisplay) {
-          _log.info(
-              'Target display properties: ${d.id} ${d.name} ${d.visiblePosition} ${d.visibleSize} ${d
-                  .scaleFactor} ${d.size}');
-
-          var globalPos = Offset(10 + d.visiblePosition!.dx, 10 + d.visiblePosition!.dy);
-          if ((posX >= 0) &&
-              (posX < d.visibleSize!.width) &&
-              (posY >= 0) &&
-              (posY < d.visibleSize!.height)) {
-            // if the local position exists on the display, use it
-            globalPos = Offset(
-                posX + d.visiblePosition!.dx, posY + d.visiblePosition!.dy);
-          }
-
-          _log.info(
-              'Setting window to ${d.name} on local pos $posX, $posY, global: $globalPos');
-          await windowManager.setBounds(null,
-              size: Size(width, height),
-              position: Offset(globalPos.dx, globalPos.dy));
-        }
-      }
+    if (Platform.isWindows) {
+      windowsInitialize(prefs);
+    } else {
+      macOsInitialize(prefs);
     }
-
-    await windowManager.show();
     windowManager.addListener(_WindowManagerListener(prefs));
   }));
 
